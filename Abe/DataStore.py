@@ -23,6 +23,7 @@
 
 import os
 import re
+import sys
 import time
 import errno
 import logging
@@ -58,6 +59,7 @@ CONFIG_DEFAULTS = {
     "import_tx":          [],
     "default_loader":     "default",
     "rpc_load_mempool":   False,
+    "max_blocks":         999999999,
 }
 
 WORK_BITS = 304  # XXX more than necessary.
@@ -216,6 +218,8 @@ class DataStore(object):
         else:
             store.commit_bytes = int(store.commit_bytes)
         store.bytes_since_commit = 0
+
+        store.max_blocks = int(args.max_blocks)
 
         store.use_firstbits = (store.config['use_firstbits'] == "true")
 
@@ -1077,6 +1081,10 @@ store._ddl['txout_approx'],
         # Get a new block ID.
         block_id = int(store.new_id("block"))
         b['block_id'] = block_id
+        if block_id >= store.max_blocks:
+            store.rollback()
+            print "sys.exit..."
+            sys.exit( 0 )
 
         if chain is not None:
             # Verify Merkle root.
@@ -1177,7 +1185,7 @@ store._ddl['txout_approx'],
         # List the block's transactions in block_tx.
         for tx_pos in xrange(len(b['transactions'])):
             tx = b['transactions'][tx_pos]
-            store.sql("UPDATE tx set unlinked = FALSE WHERE tx_id = ?", (tx['tx_id'],))
+            store.sql("UPDATE tx set unlinked = ? WHERE tx_id = ?", (False, tx['tx_id'],))
             store.sql("""
                 INSERT INTO block_tx
                     (block_id, tx_id, tx_pos)
@@ -1812,9 +1820,9 @@ store._ddl['txout_approx'],
 
         store.sql("""
             INSERT INTO tx (tx_id, tx_hash, tx_version, tx_lockTime, tx_size, unlinked)
-            VALUES (?, ?, ?, ?, ?, TRUE)""",
+            VALUES (?, ?, ?, ?, ?, ?)""",
                   (tx_id, dbhash, store.intin(tx['version']),
-                   store.intin(tx['lockTime']), tx['size']))
+                   store.intin(tx['lockTime']), tx['size'], True))
         # Always consider tx are unlinked until they are added to block_tx.
         # This is necessary as inserted tx can get committed to database
         # before the block itself
@@ -3335,7 +3343,7 @@ store._ddl['txout_approx'],
 
         rows = store.selectall("""
             SELECT tx_id, tx_hash
-             FROM tx where unlinked = TRUE""")
+             FROM tx where unlinked = ?""", (True,))
         if not rows:
             return
 
