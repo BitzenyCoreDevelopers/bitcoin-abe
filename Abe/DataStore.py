@@ -1081,9 +1081,9 @@ store._ddl['txout_approx'],
         # Get a new block ID.
         block_id = int(store.new_id("block"))
         b['block_id'] = block_id
-        if block_id >= store.max_blocks:
+        if block_id > store.max_blocks:
             store.rollback()
-            print "sys.exit..."
+            print "maximum number of blocks already stored, exiting..."
             sys.exit( 0 )
 
         if chain is not None:
