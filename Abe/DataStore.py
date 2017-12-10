@@ -1876,17 +1876,43 @@ store._ddl['txout_approx'],
                 elif tx['value_in'] is not None:
                     tx['value_in'] += value
 
-            store.sql("""
-                INSERT INTO txin (
-                    txin_id, tx_id, txin_pos, txout_id""" + (""",
-                    txin_scriptSig, txin_sequence""" if store.keep_scriptsig
-                                                             else "") + """
-                ) VALUES (?, ?, ?, ?""" + (", ?, ?" if store.keep_scriptsig
-                                           else "") + """)""",
-                      (txin_id, tx_id, pos, txout_id,
-                       store.binin(txin['scriptSig']),
-                       store.intin(txin['sequence'])) if store.keep_scriptsig
-                      else (txin_id, tx_id, pos, txout_id))
+            #<ugliness level="+inf">
+            #store.sql("""
+            #    INSERT INTO txin (
+            #        txin_id, tx_id, txin_pos, txout_id""" + (""",
+            #        txin_scriptSig, txin_sequence""" if store.keep_scriptsig
+            #                                                 else "") + """
+            #    ) VALUES (?, ?, ?, ?""" + (", ?, ?" if store.keep_scriptsig
+            #                               else "") + """)""",
+            #          (txin_id, tx_id, pos, txout_id,
+            #           store.binin(txin['scriptSig']),
+            #           store.intin(txin['sequence'])) if store.keep_scriptsig
+            #          else (txin_id, tx_id, pos, txout_id))
+            #</ugliness>
+            if store.keep_scriptsig:
+                store.sql("""
+                    INSERT INTO txin (
+                        txin_id, tx_id, txin_pos, txout_id,
+                        txin_scriptSig,
+                        txin_sequence
+                    ) VALUES (
+                        ?, ?, ?, ?,
+                        ?,
+                        ?
+                    )""", (
+                        txin_id, tx_id, pos, txout_id,
+                        store.binin(txin['scriptSig']),
+                        store.intin(txin['sequence'])
+                ) )
+            else:
+                store.sql("""
+                    INSERT INTO txin (
+                        txin_id, tx_id, txin_pos, txout_id
+                    ) VALUES (
+                        ?, ?, ?, ?
+                    )""", (
+                        txin_id, tx_id, pos, txout_id
+                ) )
             if not is_coinbase and txout_id is None:
                 tx['unlinked_count'] += 1
                 store.sql("""
