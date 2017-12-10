@@ -727,21 +727,14 @@ store._ddl['configvar'],
 )""",
 
 # A transaction of the type used by Bitcoin.
+# +++ (mf) BOOLEAN may not work on all databases
 """CREATE TABLE tx (
     tx_id         NUMERIC(26) NOT NULL PRIMARY KEY,
     tx_hash       BINARY(32)  UNIQUE NOT NULL,
     tx_version    NUMERIC(10),
     tx_lockTime   NUMERIC(10),
-    tx_size       NUMERIC(10)
-)""",
-
-# Mempool TX not linked to any block, we must track them somewhere
-# for efficient cleanup
-"""CREATE TABLE unlinked_tx (
-    tx_id        NUMERIC(26) NOT NULL,
-    PRIMARY KEY (tx_id),
-    FOREIGN KEY (tx_id)
-        REFERENCES tx (tx_id)
+    tx_size       NUMERIC(10),
+	unlinked      BOOLEAN
 )""",
 
 # Presence of transactions in blocks is many-to-many.
