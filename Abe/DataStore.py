@@ -1184,7 +1184,7 @@ store._ddl['txout_approx'],
         # List the block's transactions in block_tx.
         for tx_pos in xrange(len(b['transactions'])):
             tx = b['transactions'][tx_pos]
-            store.sql("DELETE FROM unlinked_tx WHERE tx_id = ?", (tx['tx_id'],))
+            store.sql("UPDATE tx set unlinked = FALSE WHERE tx_id = ?", (tx['tx_id'],))
             store.sql("""
                 INSERT INTO block_tx
                     (block_id, tx_id, tx_pos)
@@ -1818,14 +1818,13 @@ store._ddl['txout_approx'],
             tx['size'] = len(tx['__data__'])
 
         store.sql("""
-            INSERT INTO tx (tx_id, tx_hash, tx_version, tx_lockTime, tx_size)
-            VALUES (?, ?, ?, ?, ?)""",
+            INSERT INTO tx (tx_id, tx_hash, tx_version, tx_lockTime, tx_size, unlinked)
+            VALUES (?, ?, ?, ?, ?, TRUE)""",
                   (tx_id, dbhash, store.intin(tx['version']),
                    store.intin(tx['lockTime']), tx['size']))
         # Always consider tx are unlinked until they are added to block_tx.
         # This is necessary as inserted tx can get committed to database
         # before the block itself
-        store.sql("INSERT INTO unlinked_tx (tx_id) VALUES (?)", (tx_id,))
 
         # Import transaction outputs.
         tx['value_out'] = 0
@@ -3342,9 +3341,8 @@ store._ddl['txout_approx'],
         """
 
         rows = store.selectall("""
-            SELECT ut.tx_id, t.tx_hash
-             FROM unlinked_tx ut
-             JOIN tx t ON (ut.tx_id = t.tx_id)""")
+            SELECT tx_id, tx_hash
+             FROM tx where unlinked = TRUE""")
         if not rows:
             return
 
@@ -3407,7 +3405,6 @@ store._ddl['txout_approx'],
                     store.sql("DELETE FROM pubkey WHERE pubkey_id = ?", (pk_id,))
 
         # Finally clean up tx itself
-        store.sql("DELETE FROM unlinked_tx WHERE tx_id = ?", (tx_id,))
         store.sql("DELETE FROM tx WHERE tx_id = ?", (tx_id,))
 
 
