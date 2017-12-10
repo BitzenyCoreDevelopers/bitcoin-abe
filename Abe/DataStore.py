@@ -6,12 +6,12 @@
 # it under the terms of the GNU Affero General Public License as
 # published by the Free Software Foundation, either version 3 of the
 # License, or (at your option) any later version.
-# 
+#
 # This program is distributed in the hope that it will be useful, but
 # WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
 # Affero General Public License for more details.
-# 
+#
 # You should have received a copy of the GNU Affero General Public
 # License along with this program.  If not, see
 # <http://www.gnu.org/licenses/agpl.html>.
@@ -99,6 +99,11 @@ PUBKEY_ID_NETWORK_FEE = NULL_PUBKEY_ID
 MAX_SCRIPT = SqlAbstraction.MAX_SCRIPT
 MAX_PUBKEY = SqlAbstraction.MAX_PUBKEY
 NO_CLOB = SqlAbstraction.NO_CLOB
+
+def parse_time(timer_arr):
+    elapsed = float(timer_arr[-1] - timer_arr[0])
+    t = [ int((timer_arr[i] - timer_arr[i-1])/elapsed * 100) for i in xrange(len(timer_arr)) if i > 0 ]
+    return "{:.4f} {}".format(elapsed, t)
 
 # XXX This belongs in another module.
 class InvalidBlock(Exception):
@@ -1046,6 +1051,8 @@ store._ddl['txout_approx'],
         b['value_out'] = 0
         b['value_destroyed'] = 0
         tx_hash_array = []
+        #import pdb
+        #pdb.set_trace()
 
         # In the common case, all the block's txins _are_ linked, and we
         # can avoid a query if we notice this.
@@ -1183,6 +1190,7 @@ store._ddl['txout_approx'],
 
         # List the block's transactions in block_tx.
         for tx_pos in xrange(len(b['transactions'])):
+            start = time.time()
             tx = b['transactions'][tx_pos]
             store.sql("UPDATE tx set unlinked = FALSE WHERE tx_id = ?", (tx['tx_id'],))
             store.sql("""
@@ -1190,7 +1198,8 @@ store._ddl['txout_approx'],
                     (block_id, tx_id, tx_pos)
                 VALUES (?, ?, ?)""",
                       (block_id, tx['tx_id'], tx_pos))
-            store.log.info("block_tx %d %d", block_id, tx['tx_id'])
+            end = time.time()
+            store.log.info("%f: block_tx %d %d", end - start, block_id, tx['tx_id'])
 
         if b['height'] is not None:
             store._populate_block_txin(block_id)
@@ -1813,6 +1822,8 @@ store._ddl['txout_approx'],
     def import_tx(store, tx, is_coinbase, chain):
         tx_id = store.new_id("tx")
         dbhash = store.hashin(tx['hash'])
+        timer = []
+        timer.append(time.time())
 
         if 'size' not in tx:
             tx['size'] = len(tx['__data__'])
@@ -1826,6 +1837,7 @@ store._ddl['txout_approx'],
         # This is necessary as inserted tx can get committed to database
         # before the block itself
 
+        timer.append(time.time())
         # Import transaction outputs.
         tx['value_out'] = 0
         tx['value_destroyed'] = 0
@@ -1858,6 +1870,7 @@ store._ddl['txout_approx'],
                 store.sql("DELETE FROM unlinked_txin WHERE txin_id = ?",
                           (txin_id,))
 
+        timer.append(time.time())
         # Import transaction inputs.
         tx['value_in'] = 0
         tx['unlinked_count'] = 0
@@ -1898,6 +1911,8 @@ store._ddl['txout_approx'],
         # XXX Could populate PUBKEY.PUBKEY with txin scripts...
         # or leave that to an offline process.  Nothing in this program
         # requires them.
+        timer.append(time.time())
+        store.log.debug("import_tx {} {}".format(tx_id, parse_time(timer)))
         return tx_id
 
     def import_and_commit_tx(store, tx, is_coinbase, chain):
