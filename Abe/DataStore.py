@@ -119,6 +119,103 @@ class MalformedHash(ValueError):
 class MalformedAddress(ValueError):
     pass
 
+class LoadCache:
+
+    def __init__( self, store ):
+        self.store = store
+        self.hashes = {}
+        self.min_height = -1
+        self.store_on_db = None
+        count, max_height = store.selectrow("""
+                select count(*), max(block_height) from block
+            """)
+        if count > 0:
+            self.min_height = 999999999
+            for row in store.selectall("""
+                    select block_hash,block_height from block
+                    where block_height >= ?
+                    """, (max_height-2,)):
+                hash, height = row
+                # hash, height, prevHash, block
+                self.hashes[hash] = [ hash, height, None, None ]
+                if height < self.min_height:
+                    self.min_height = height
+
+    def stringify( self, x ):
+        return str(self.store.hashin( x )).encode( 'hex_codec' )
+
+    def add_block( self, b ):
+        # hash = self.store.hashin(b['hash'])
+        # hashPrev = self.store.hashin(b['hashPrev'])
+        hash = self.stringify(b['hash'])
+        hashPrev = self.stringify(b['hashPrev'])
+        self.hashes[hash] = [ hash, None, hashPrev, b ]
+        # print "add ", hash
+        # this block has to be stored if it is not processed in
+        # the next call to get_next_block()
+        self.store_on_db = hash
+
+    def get_next_block( self ):
+        ret_block = None
+        entry_found = None
+        if self.min_height >= 0:
+            # normal search for the next entry
+            for entry in self.hashes.values():
+                if entry[3]:
+                    hash, height, hashPrev, b = entry
+                    if hashPrev in self.hashes:
+                        prevHeight = self.hashes[hashPrev][1]
+                        if prevHeight != None:
+                            entry_found = entry
+                            entry_found[1] = prevHeight + 1
+                            break
+        elif len(self.hashes) >= 20:
+            # no entries in the database, find first entry
+            candidates = []
+            for entry in self.hashes.values():
+                hash, height, hashPrev, b = entry
+                if not hashPrev in self.hashes:
+                    candidates.append( entry )
+            if len(candidates) == 0:
+                print "no candidates for the first block!?!"
+                sys.exit(1)
+            if len(candidates) > 1:
+                if len(self.hashes) < 40:
+                    return None
+                print " candidates for the first block!?!"
+                sys.exit(1)
+            entry_found = candidates[0]
+            entry_found[1] = 1
+            self.min_height = 0
+        if entry_found != None:
+            ret_block = entry_found[3]
+            entry_found[3] = None
+            #print "next", entry[0], entry[1]
+            # +++ should remove block info from DB
+            if self.store_on_db == entry_found[0]:
+                # insert+delete = nothing to do
+                self.store_on_db = None
+                print "i/d", entry_found[0], entry_found[1]
+            else:
+                self.delete_block_from_db( entry_found[0] )
+            self.shrink_cache( entry_found[1] )
+        if self.store_on_db:
+            self.insert_block_into_db( self.store_on_db )
+            self.store_on_db = None
+        return ret_block
+
+    def insert_block_into_db( self, hash ):
+        # +++ implement
+        print "ins", hash
+                    
+    def delete_block_from_db( self, hash ):
+        # +++ implement
+        print "del", hash, self.hashes[hash][1]
+                    
+    def shrink_cache( self, last_height ):
+        pass # +++ implement
+                    
+
 class DataStore(object):
 
     """
@@ -237,6 +334,8 @@ class DataStore(object):
         store.default_chain = args.default_chain;
 
         store.commit()
+
+        store.load_cache = LoadCache( store )
 
     def set_db(store, db):
         store._sql = db
@@ -968,6 +1067,7 @@ store._ddl['txout_approx'],
             'height':    height,
             'prev_id':   prev_id,
             'search_id': search_id}
+        # ++++ (mf) who is removing them later?
         store._blocks[block_id] = block
         return block
 
@@ -1031,6 +1131,17 @@ store._ddl['txout_approx'],
                 None if satoshi_seconds is None else int(satoshi_seconds),
                 None if total_ss is None else int(total_ss),
                 int(nTime))
+
+    def import_or_cache__block(store, b, chain_ids=None, chain=None):
+        # hashPrev = b['hashPrev']
+        # store.find_prev(hashPrev)
+        # store.hashin(b['hash'])
+        store.load_cache.add_block( b )
+        while True:
+            b = store.load_cache.get_next_block()
+            if not b:
+                return
+            store.import_block( b, chain_ids, chain )
 
     def import_block(store, b, chain_ids=None, chain=None):
 
@@ -2782,7 +2893,8 @@ store._ddl['txout_approx'],
                             block)) != hash:
                         raise InvalidBlock('block hash mismatch')
 
-                    store.import_block(block, chain = chain)
+                    # store.import_block(block, chain = chain)
+                    store.import_or_cache__block(block, chain = chain)
                     store.imported_bytes(ds.read_cursor)
                     ds.clear()
                     rpc_hash = get_blockhash(height + 1)
@@ -2998,7 +3110,8 @@ store._ddl['txout_approx'],
                     except Exception:
                         pass
 
-                store.import_block(b, chain = chain)
+                # store.import_block(b, chain = chain)
+                store.import_or_cache__block(b, chain = chain)
                 if ds.read_cursor != end:
                     store.log.debug("Skipped %d bytes at block end",
                                     end - ds.read_cursor)
