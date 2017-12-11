@@ -149,7 +149,10 @@ class LoadCache:
         # hashPrev = self.store.hashin(b['hashPrev'])
         hash = self.stringify(b['hash'])
         hashPrev = self.stringify(b['hashPrev'])
-        self.hashes[hash] = [ hash, None, hashPrev, b ]
+        if not hash in self.hashes:
+            self.hashes[hash] = [ hash, None, hashPrev, b ]
+        elif self.hashes[hash][1] == None:
+            print "*** add_block with existing one in cache without height ***"
         # print "add ", hash
         # this block has to be stored if it is not processed in
         # the next call to get_next_block()
