@@ -136,8 +136,9 @@ class LoadCache:
 
         if count > 0 and max_height:
             if max_height + 1 >= store.max_blocks:
-                print "Parsed max height of blocks already", max_height
-                sys.exit(1)
+                print "Parsed max height of blocks already, exiting..."
+                store.rollback()
+                sys.exit(0)
 
             for hash, height in store.selectall("""
                     select block_hash, block_height from block
@@ -146,13 +147,16 @@ class LoadCache:
                 # hash, height, prevHash, block
                 self.hashes[hash] = [ hash, height, None, None ]
 
+            load_count = 0
             for hash, data in store.selectall("""
                     select block_hash, block_data from block_cache
                     """):
                 b = cPickle.loads(binascii.a2b_base64(data))
                 hashPrev = self.stringify(b['hashPrev'])
+                load_count += 1
                 self.hashes[hash] = [ hash, None, hashPrev, b ]
 
+            print "Loaded {} blocks from cache".format(load_count)
             self.has_start_block = len(self.hashes) > 0
 
     def stringify( self, x ):
@@ -165,12 +169,12 @@ class LoadCache:
         hashPrev = self.stringify(b['hashPrev'])
         if not hash in self.hashes:
             self.hashes[hash] = [ hash, None, hashPrev, b ]
+            self.store_on_db = b
         elif self.hashes[hash][1] == None:
             print "*** add_block with existing one in cache without height ***"
         # print "add ", hash
         # this block has to be stored if it is not processed in
         # the next call to get_next_block()
-        self.store_on_db = b
 
     def get_next_block( self ):
         ret_block = None
@@ -186,7 +190,6 @@ class LoadCache:
                         break
         elif len(self.hashes) >= 20:
             # no entries in the database, find first entry
-            print "nextblock: candidates"
             candidates = []
             for hash, height, hashPrev, b in self.hashes.values():
                 if not hashPrev in self.hashes:
@@ -1224,7 +1227,10 @@ store._ddl['txout_approx'],
         block_id = int(store.new_id("block"))
         b['block_id'] = block_id
 
-        if block_id > store.max_blocks:
+        if block_id == store.max_blocks:
+            ## Force flush on last block
+            store.flush()
+        elif block_id > store.max_blocks:
             store.rollback()
             print "maximum number of blocks already stored, exiting..."
             sys.exit( 0 )
