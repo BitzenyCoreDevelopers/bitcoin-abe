@@ -1175,7 +1175,16 @@ store._ddl['txout_approx'],
             b = store.load_cache.get_next_block()
             if not b:
                 return
-            store.import_block( b, chain_ids, chain )
+            block_id = store.import_block( b, chain_ids, chain )
+            
+            if block_id == store.max_blocks:
+                ## Force flush on last block
+                store.flush()
+            elif block_id > store.max_blocks:
+                store.rollback()
+                print "maximum number of blocks already stored, exiting..."
+                sys.exit( 0 )
+
 
     def import_block(store, b, chain_ids=None, chain=None):
 
@@ -1226,14 +1235,6 @@ store._ddl['txout_approx'],
         # Get a new block ID.
         block_id = int(store.new_id("block"))
         b['block_id'] = block_id
-
-        if block_id == store.max_blocks:
-            ## Force flush on last block
-            store.flush()
-        elif block_id > store.max_blocks:
-            store.rollback()
-            print "maximum number of blocks already stored, exiting..."
-            sys.exit( 0 )
 
         if chain is not None:
             # Verify Merkle root.
