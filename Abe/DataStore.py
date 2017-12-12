@@ -6,12 +6,12 @@
 # it under the terms of the GNU Affero General Public License as
 # published by the Free Software Foundation, either version 3 of the
 # License, or (at your option) any later version.
-# 
+#
 # This program is distributed in the hope that it will be useful, but
 # WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
 # Affero General Public License for more details.
-# 
+#
 # You should have received a copy of the GNU Affero General Public
 # License along with this program.  If not, see
 # <http://www.gnu.org/licenses/agpl.html>.
@@ -27,6 +27,8 @@ import sys
 import time
 import errno
 import logging
+import cPickle
+import binascii
 
 import SqlAbstraction
 
@@ -119,27 +121,39 @@ class MalformedHash(ValueError):
 class MalformedAddress(ValueError):
     pass
 
+import pdb
+
 class LoadCache:
 
     def __init__( self, store ):
         self.store = store
         self.hashes = {}
-        self.min_height = -1
+        self.has_start_block = False
         self.store_on_db = None
         count, max_height = store.selectrow("""
                 select count(*), max(block_height) from block
             """)
-        if count > 0:
-            self.min_height = 999999999
-            for row in store.selectall("""
-                    select block_hash,block_height from block
+
+        if count > 0 and max_height:
+            if max_height + 1 >= store.max_blocks:
+                print "Parsed max height of blocks already", max_height
+                sys.exit(1)
+
+            for hash, height in store.selectall("""
+                    select block_hash, block_height from block
                     where block_height >= ?
                     """, (max_height-2,)):
-                hash, height = row
                 # hash, height, prevHash, block
                 self.hashes[hash] = [ hash, height, None, None ]
-                if height < self.min_height:
-                    self.min_height = height
+
+            for hash, data in store.selectall("""
+                    select block_hash, block_data from block_cache
+                    """):
+                b = cPickle.loads(binascii.a2b_base64(data))
+                hashPrev = self.stringify(b['hashPrev'])
+                self.hashes[hash] = [ hash, None, hashPrev, b ]
+
+            self.has_start_block = len(self.hashes) > 0
 
     def stringify( self, x ):
         return str(self.store.hashin( x )).encode( 'hex_codec' )
@@ -156,46 +170,45 @@ class LoadCache:
         # print "add ", hash
         # this block has to be stored if it is not processed in
         # the next call to get_next_block()
-        self.store_on_db = hash
+        self.store_on_db = b
 
     def get_next_block( self ):
         ret_block = None
         entry_found = None
-        if self.min_height >= 0:
+        if self.has_start_block:
             # normal search for the next entry
-            for entry in self.hashes.values():
-                if entry[3]:
-                    hash, height, hashPrev, b = entry
-                    if hashPrev in self.hashes:
-                        prevHeight = self.hashes[hashPrev][1]
-                        if prevHeight != None:
-                            entry_found = entry
-                            entry_found[1] = prevHeight + 1
-                            break
+            for hash, height, hashPrev, b in self.hashes.values():
+                if b and hashPrev in self.hashes:
+                    prevHeight = self.hashes[hashPrev][1]
+                    if prevHeight != None:
+                        entry_found = self.hashes[hash]
+                        entry_found[1] = prevHeight + 1
+                        break
         elif len(self.hashes) >= 20:
             # no entries in the database, find first entry
+            print "nextblock: candidates"
             candidates = []
-            for entry in self.hashes.values():
-                hash, height, hashPrev, b = entry
+            for hash, height, hashPrev, b in self.hashes.values():
                 if not hashPrev in self.hashes:
-                    candidates.append( entry )
+                    candidates.append( self.hashes[hash] )
             if len(candidates) == 0:
                 print "no candidates for the first block!?!"
                 sys.exit(1)
             if len(candidates) > 1:
                 if len(self.hashes) < 40:
                     return None
-                print " candidates for the first block!?!"
+                print "multiple candidates for the first block!?!"
                 sys.exit(1)
             entry_found = candidates[0]
             entry_found[1] = 1
-            self.min_height = 0
+            self.has_start_block = True
+
         if entry_found != None:
             ret_block = entry_found[3]
             entry_found[3] = None
             #print "next", entry[0], entry[1]
             # +++ should remove block info from DB
-            if self.store_on_db == entry_found[0]:
+            if self.store_on_db and self.stringify(self.store_on_db['hash']) == entry_found[0]:
                 # insert+delete = nothing to do
                 self.store_on_db = None
                 print "i/d", entry_found[0], entry_found[1]
@@ -207,17 +220,27 @@ class LoadCache:
             self.store_on_db = None
         return ret_block
 
-    def insert_block_into_db( self, hash ):
+    def insert_block_into_db( self, b ):
         # +++ implement
+        hash = self.stringify(b['hash'])
+        obj_data = binascii.b2a_base64(cPickle.dumps(b, -1))
+
         print "ins", hash
-                    
+        self.store.sql("""
+            INSERT INTO block_cache (
+                block_hash, block_data
+            ) VALUES (?, ?)""",
+                  (hash, obj_data))
+
     def delete_block_from_db( self, hash ):
         # +++ implement
-        print "del", hash, self.hashes[hash][1]
-                    
+        print "del", hash
+        self.store.sql("""DELETE FROM block_cache WHERE block_hash = ?""",
+                  (hash,))
+
     def shrink_cache( self, last_height ):
         pass # +++ implement
-                    
+
 
 class DataStore(object):
 
@@ -781,6 +804,11 @@ store._ddl['configvar'],
         REFERENCES block (block_id)
 )""",
 
+"""CREATE TABLE block_cache (
+    block_hash    VARCHAR(255)  UNIQUE NOT NULL,
+    block_data    text
+)""",
+
 # CHAIN comprises a magic number, a policy, and (indirectly via
 # CHAIN_LAST_BLOCK_ID and the referenced block's ancestors) a genesis
 # block, possibly null.  A chain may have a currency code.
@@ -1195,6 +1223,7 @@ store._ddl['txout_approx'],
         # Get a new block ID.
         block_id = int(store.new_id("block"))
         b['block_id'] = block_id
+
         if block_id > store.max_blocks:
             store.rollback()
             print "maximum number of blocks already stored, exiting..."
