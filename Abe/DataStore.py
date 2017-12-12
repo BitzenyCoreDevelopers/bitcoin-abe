@@ -155,12 +155,13 @@ class LoadCache:
                 hashPrev = self.stringify(b['hashPrev'])
                 load_count += 1
                 self.hashes[hash] = [ hash, None, hashPrev, b ]
+                #print "LOADING", self.stringify(hash)
 
             print "Loaded {} blocks from cache".format(load_count)
             self.has_start_block = len(self.hashes) > 0
 
     def stringify( self, x ):
-        return str(self.store.hashin( x )).encode( 'hex_codec' )
+        return base58.b58encode(x)
 
     def add_block( self, b ):
         # hash = self.store.hashin(b['hash'])
@@ -232,7 +233,7 @@ class LoadCache:
         self.store.sql("""
             INSERT INTO block_cache (
                 block_hash, block_data
-            ) VALUES (?, ?)""",
+            ) VALUES (?, ?) ON CONFLICT DO NOTHING""",
                   (hash, obj_data))
 
     def delete_block_from_db( self, hash ):
@@ -244,6 +245,8 @@ class LoadCache:
     def shrink_cache( self, last_height ):
         pass # +++ implement
 
+    def print_hashes( self ):
+        print len(self.hashes), self.hashes.keys()
 
 class DataStore(object):
 
@@ -1176,12 +1179,13 @@ store._ddl['txout_approx'],
             if not b:
                 return
             block_id = store.import_block( b, chain_ids, chain )
-            
+
             if block_id == store.max_blocks:
                 ## Force flush on last block
                 store.flush()
             elif block_id > store.max_blocks:
                 store.rollback()
+                #store.load_cache.print_hashes()
                 print "maximum number of blocks already stored, exiting..."
                 sys.exit( 0 )
 
